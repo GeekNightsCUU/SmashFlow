@@ -26,17 +26,21 @@ public class SmashFlow implements ApplicationListener {
 	
 	private FPSLogger fpslogger;
 	
-	// World settions
+	// World sections
 	private float currentColor = 0.0f;
-	private final int width = 110; // 110
-	private final int height = 60; // 60
-	private int pixelSize = 8;
+	private final int width = 120; // Default 110
+	private final int height = 60; // Default 60
+	private int pixelSize = 7;
 	
 	private int offsetX = 0;
 	private int offsetY = 0;
 	
 	float[][] worldMap = new float[width][];
 	float[] row = new float[height];
+	boolean[][] unitsToMove = new boolean[width][];
+	
+	Point2d movementCursor = new Point2d(0, 0);
+	Point2d direction = new Point2d(); // Used in movement to avoid GC
 	
 	@Override
 	public void create() {		
@@ -57,6 +61,15 @@ public class SmashFlow implements ApplicationListener {
 		for (int current_column = 0; current_column < width; ++current_column) {
 			// Insert rows
 			worldMap[current_column] = new float[height];
+			unitsToMove[current_column] = new boolean[height];
+		}
+		
+		// Create some units
+		//worldMap[(int)(width / 2)][(int)height / 2] = 1.0f;
+		for (int x = 0; x < 20; ++x) {
+			for (int y = 0; y < 20; ++y) {
+				worldMap[x][y] = 1.0f;
+			}
 		}
 		
 		// Create the background
@@ -92,9 +105,11 @@ public class SmashFlow implements ApplicationListener {
 			}
 		}
 
-		createRain(worldMap);
-		applyGravity(worldMap);
-		
+		// Apply the "physics" engine
+		//createRain();
+		//applyGravity();
+		moveUnits();
+		clearUnitsToMove();
 		
 		// Render units
 		shapeRenderer.setProjectionMatrix(camera.combined);
@@ -104,7 +119,7 @@ public class SmashFlow implements ApplicationListener {
 			for (int y = 0; y < height; ++y) {
 				currentColor = worldMap[x][y];
 				
-				// Only draw the pixel if has a color
+				// Only draw the pixel if it has a color
 				if (worldMap[x][y] != 0.0f) {
 					shapeRenderer.setColor(currentColor, currentColor, currentColor, 1);
 					shapeRenderer.rect((x * pixelSize) + offsetX,
@@ -114,6 +129,21 @@ public class SmashFlow implements ApplicationListener {
 			}
 		}
 		
+		// Draw border around the play space 
+		shapeRenderer.setColor(0.0f, 0.0f, 0.0f, 0.1f); // Black
+		shapeRenderer.rect(offsetX - pixelSize, // Bottom
+				offsetY - pixelSize,
+				pixelSize * (width + 1), pixelSize);
+		shapeRenderer.rect(offsetX - pixelSize, // Top
+				offsetY + (pixelSize * height),
+				pixelSize * (width + 1), pixelSize);
+		shapeRenderer.rect(offsetX - pixelSize, // Left
+				offsetY - pixelSize,
+				pixelSize, pixelSize * (height + 1));
+		shapeRenderer.rect(offsetX + (pixelSize * width), // Right
+				offsetY - pixelSize,
+				pixelSize, pixelSize * (height + 2));
+		
 		shapeRenderer.end();
 		
 		// Check touches
@@ -122,7 +152,7 @@ public class SmashFlow implements ApplicationListener {
 			int touchX = Gdx.input.getX();
 			int touchY = Gdx.input.getY();
 			
-			Gdx.app.log("touch", "X: " + touchX + " Y:" + touchY);
+			//Gdx.app.log("touch", "X: " + touchX + " Y:" + touchY);
 			
 			Point2d point2d = getLocalCoordinates(touchX, touchY);
 			boolean valid_point = point2d.x >= 0
@@ -132,7 +162,11 @@ public class SmashFlow implements ApplicationListener {
 					;
 					
 			if (valid_point) {
-				worldMap[point2d.x][point2d.y] = 1.0f; 
+				// Create unit in the selected position
+				//worldMap[point2d.x][point2d.y] = 1.0f;
+				
+				// Move the cursor to the selected position
+				movementCursor = point2d;
 			}
 		}
 		
@@ -161,12 +195,13 @@ public class SmashFlow implements ApplicationListener {
 		// Calculate the unit we're selecting
 		int pointX = (x - offsetX - centerX) / pixelSize;
 		int pointY = -(y + offsetY - centerY) / pixelSize;
-		Gdx.app.log("local_coord", "X: " + pointX + " Y:" + pointY);
+		//Gdx.app.log("local_coord", "X: " + pointX + " Y:" + pointY);
 		
 		return new Point2d(pointX, pointY);
 	}
 	
-	private void applyGravity(float[][] worldMap) {
+	/*
+	private void applyGravity() {
 		for (int current_row = 0; current_row < height - 1; ++current_row) {
 			for (int current_column = 0; current_column < width; ++current_column) {
 				// Copy the unit from the upper row
@@ -180,12 +215,131 @@ public class SmashFlow implements ApplicationListener {
 		}
 	}
 	
-	private void createRain(float[][] worldMap) {
+	private void createRain() {
 		for (int current_column = 0; current_column < width; ++current_column) {
 			// Create random rain-drops in the second row (the first is used as cleaning)
 			// Using stupid 10% chance of creating a rain drop
 			if (java.lang.Math.random() * 10 < 1) {
 				worldMap[current_column][height - 1] = 1;
+			}
+		}
+	}
+	*/
+	
+	private void moveUnits() {
+		// Mark the units we're going to move
+		// To avoid race conditions where the same unit is moved many times
+		for (int x = 0; x < width; ++x) {
+			for (int y = 0; y < height; ++y) {
+				// Only move units with value (not empty)
+				if (worldMap[x][y] != 0.0f) {
+					unitsToMove[x][y] = true; 
+				}
+			}
+		}
+		
+		// Now, move the units
+		for (int x = 0; x < width; ++x) {
+			for (int y = 0; y < height; ++y) {
+				if (unitsToMove[x][y]) {
+					moveUnitToCursor(new Point2d(x, y));;
+				}
+			}
+		}
+	}
+	
+	private void moveUnitToCursor(Point2d unit) {
+		int deltaX = movementCursor.x - unit.x;
+		int deltaY = movementCursor.y - unit.y;
+		
+		int destX = 0;
+		int destY = 0;
+		
+		float tan = 0.0f;
+		if (deltaX != 0) {
+			tan = deltaY / deltaX; 
+		} else {
+			tan = deltaY / 0.001f;
+		}
+		
+		// Stupid interpolation to calculate movement - Didn't work
+		if (tan >= 0.4142f && tan < 2.4142f) {
+			if (deltaX > 0) {
+				direction.x = 1;
+				direction.y = 1; 
+			} else {
+				direction.x = -1;
+				direction.y = -1; 
+			}
+		}
+		
+		if (tan >= -2.4142f && tan < -0.4142f) {
+			if (deltaX > 0) {
+				direction.x = 1;
+				direction.y = -1; 
+			} else {
+				direction.x = -1;
+				direction.y = 1; 
+			}
+		}
+		
+		if (tan >= 2.4142f || tan < -2.4142f) {
+			if (deltaY > 0) {
+				direction.x = 0;
+				direction.y = 1; 
+			} else {
+				direction.x = 0;
+				direction.y = -1; 
+			}
+		}
+		
+		if (tan >= -0.4142f && tan < 0.4142f) {
+			if (deltaX > 0) {
+				direction.x = 1;
+				direction.y = 0; 
+			} else {
+				direction.x = -1;
+				direction.y = 0; 
+			}
+		}
+		
+		if (deltaX == 0 && deltaY == 0) {
+			direction.x = 0;
+			direction.y = 0; 
+		}
+		
+		destX = unit.x + direction.x;
+		destY = unit.y + direction.y;
+		
+		// If we're within the game area and the space is empty 
+		if (destX >= 0 && destX < width && destY >= 0 && destY < height) {
+			if (worldMap[destX][destY] == 0.0f) {
+				worldMap[destX][destY] = 1.0f;
+				worldMap[unit.x][unit.y] = 0.0f;
+			} /*else { // Stupid algorithm to move in other ways if there are collisions
+				destX = unit.x;
+				destY = unit.y + direction.y;
+				
+				if (worldMap[destX][destY] == 0.0f) {
+					worldMap[destX][destY] = 1.0f;
+					worldMap[unit.x][unit.y] = 0.0f;
+				} else {
+					destX = unit.x + direction.x;
+					destY = unit.y;
+					
+					if (worldMap[destX][destY] == 0.0f) {
+						worldMap[destX][destY] = 1.0f;
+						worldMap[unit.x][unit.y] = 0.0f;
+					}
+				}
+			}*/
+		}
+	}
+	
+	private void clearUnitsToMove() {
+		for (int x = 0; x < width; ++x) {
+			for (int y = 0; y < height; ++y) {
+				unitsToMove[x][y] = false;
 			}
 		}
 	}
