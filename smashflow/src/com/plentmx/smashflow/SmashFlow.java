@@ -14,6 +14,7 @@ import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer.ShapeType;
+import com.sun.org.apache.xml.internal.security.Init;
 
 public class SmashFlow implements ApplicationListener {
 	private OrthographicCamera camera;
@@ -38,9 +39,14 @@ public class SmashFlow implements ApplicationListener {
 	float[][] worldMap = new float[width][];
 	float[] row = new float[height];
 	boolean[][] unitsToMove = new boolean[width][];
+	Point2d currentUnitToMove = new Point2d(0, 0);
 	
 	Point2d movementCursor = new Point2d(0, 0);
 	Point2d direction = new Point2d(); // Used in movement to avoid GC
+	Point2d currentParticleDir = new Point2d();
+	int currentDistance = 0;
+	int bestDistance = 0;
+	Point2d[] movements = new Point2d[8];
 	
 	@Override
 	public void create() {		
@@ -84,6 +90,9 @@ public class SmashFlow implements ApplicationListener {
 		sprite.setSize(sprite.getWidth(), sprite.getHeight());
 		sprite.setOrigin(sprite.getWidth() / 2, sprite.getHeight() / 2);
 		sprite.setPosition(-sprite.getWidth() / 2, -sprite.getHeight() / 2);
+		
+		// Init the 8 directions around a point
+		initMovements();
 	}
 
 	@Override
@@ -143,6 +152,21 @@ public class SmashFlow implements ApplicationListener {
 		shapeRenderer.rect(offsetX + (pixelSize * width), // Right
 				offsetY - pixelSize,
 				pixelSize, pixelSize * (height + 2));
+		
+		// Draw current cursor - A cross around the movement cursor
+		shapeRenderer.setColor(0.5f, 0, 0, 1);
+		shapeRenderer.rect(((movementCursor.x + 1) * pixelSize) + offsetX,
+				(movementCursor.y * pixelSize) + offsetY,
+				pixelSize, pixelSize);
+		shapeRenderer.rect(((movementCursor.x - 1) * pixelSize) + offsetX,
+				(movementCursor.y * pixelSize) + offsetY,
+				pixelSize, pixelSize);
+		shapeRenderer.rect((movementCursor.x * pixelSize) + offsetX,
+				((movementCursor.y + 1) * pixelSize) + offsetY,
+				pixelSize, pixelSize);
+		shapeRenderer.rect((movementCursor.x * pixelSize) + offsetX,
+				((movementCursor.y - 1) * pixelSize) + offsetY,
+				pixelSize, pixelSize);
 		
 		shapeRenderer.end();
 		
@@ -242,13 +266,68 @@ public class SmashFlow implements ApplicationListener {
 		for (int x = 0; x < width; ++x) {
 			for (int y = 0; y < height; ++y) {
 				if (unitsToMove[x][y]) {
-					moveUnitToCursor(new Point2d(x, y));;
+					currentUnitToMove.x = x;
+					currentUnitToMove.y = y;
+					moveUnitToCursor(currentUnitToMove);
 				}
 			}
 		}
 	}
 	
 	private void moveUnitToCursor(Point2d unit) {
+		// Initialize with the current position of the particle 
+		currentParticleDir.x = 0;
+		currentParticleDir.y = 0;
+		
+		//Gdx.app.log("Current particle", unit.x + " " + unit.y);
+		
+		int xDist = unit.x - movementCursor.x;
+		int yDist = unit.y - movementCursor.y;
+		
+		bestDistance = (int)(Math.pow(xDist, 2) + Math.pow(yDist, 2));
+		//Gdx.app.log("Best distance", bestDistance + "");
+		
+		// Check the distances of each of the available movements
+		for (int currentMovement = 0; currentMovement < movements.length; ++currentMovement) {
+			int xMove = movements[currentMovement].x;
+			int yMove = movements[currentMovement].y;
+			
+			int xDest = unit.x + xMove;
+			int yDest = unit.y + yMove;
+			//Gdx.app.log("Current destination", xDest + " " + yDest);
+			
+			// For default get infinite distance
+			currentDistance = Integer.MAX_VALUE - 1;
+			
+			// Check we're in the allowed space
+			if (xDest >= 0 && xDest < width && yDest >= 0 && yDest < height) {
+				
+				if (worldMap[xDest][yDest] != 1.0f) { // If the space is empty
+					// Calculate the base point and one of the 8 movements evaluated
+					currentDistance = (int)(Math.pow(xDist + xMove, 2) + Math.pow(yDist + yMove, 2));
+					//Gdx.app.log("current_dist", currentDistance + " " + xMove + " " + yMove);
+				}
+			}
+			
+			
+			if (currentDistance < bestDistance) {
+				currentParticleDir.x = movements[currentMovement].x;
+				currentParticleDir.y = movements[currentMovement].y;
+				bestDistance = currentDistance;
+				//Gdx.app.log("best_distance", bestDistance + "");
+				//Gdx.app.log("best_distance", "X: " + xMove + " Y: " + yMove);
+			}
+		}
+		
+		// If the particle is going to be moved, copy to the new place and delete the current one
+		if (currentParticleDir.x != 0 || currentParticleDir.y != 0) {
+			worldMap[unit.x + currentParticleDir.x][unit.y + currentParticleDir.y] = 1.0f;
+			worldMap[unit.x][unit.y] = 0.0f;
+		}
+		
+	}
+	
+	private void moveUnitToCursor_old(Point2d unit) {
 		int deltaX = movementCursor.x - unit.x;
 		int deltaY = movementCursor.y - unit.y;
 		
@@ -316,7 +395,7 @@ public class SmashFlow implements ApplicationListener {
 			if (worldMap[destX][destY] == 0.0f) {
 				worldMap[destX][destY] = 1.0f;
 				worldMap[unit.x][unit.y] = 0.0f;
-			} /*else { // Stupid algorithm to move in other ways if there are collisions
+			} else { // Stupid algorithm to move in other ways if there are collisions
 				destX = unit.x;
 				destY = unit.y + direction.y;
 				
@@ -332,9 +411,10 @@ public class SmashFlow implements ApplicationListener {
 						worldMap[unit.x][unit.y] = 0.0f;
 					}
 				}
-			}*/
+			}
 		}
 	}
+	//*/
 	
 	private void clearUnitsToMove() {
 		for (int x = 0; x < width; ++x) {
@@ -342,6 +422,17 @@ public class SmashFlow implements ApplicationListener {
 				unitsToMove[x][y] = false;
 			}
 		}
+	}
+	
+	private void initMovements() {
+		movements[0] = new Point2d(0, 1);
+		movements[1] = new Point2d(1, 1);
+		movements[2] = new Point2d(1, 0);
+		movements[3] = new Point2d(1, -1);
+		movements[4] = new Point2d(0, -1);
+		movements[5] = new Point2d(-1, -1);
+		movements[6] = new Point2d(-1, 0);
+		movements[7] = new Point2d(-1, 1);
 	}
 
 	@Override
